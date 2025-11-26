@@ -1,4 +1,4 @@
-console.log("Starting VidKing Backend [Blind Clicker]...");
+console.log("Starting VidKing Backend [Force Play Edition]...");
 
 const express = require('express');
 const puppeteer = require('puppeteer-core');
@@ -16,11 +16,12 @@ const REGIONS = [
     `wss://chrome.browserless.io?token=${BROWSERLESS_KEY}&stealth`
 ];
 
+// REORDERED: .pro is often cleaner. Added https/http support.
 const SOURCES = [
-    "https://vidsrc.to/embed/movie/",
+    "https://vidsrc.pro/embed/movie/",
     "https://vidsrc.xyz/embed/movie/",
-    "https://vidsrc.me/embed/movie/",
-    "https://superembed.stream/movie/"
+    "https://vidsrc.to/embed/movie/",
+    "https://vidsrc.me/embed/movie/"
 ];
 
 async function getBrowser() {
@@ -29,8 +30,7 @@ async function getBrowser() {
             console.log(`[CONNECTING] Trying region: ${endpoint.split('?')[0]}...`);
             const browser = await puppeteer.connect({ 
                 browserWSEndpoint: endpoint,
-                // Set a standard Laptop screen size so center clicks land correctly
-                defaultViewport: { width: 1366, height: 768 } 
+                defaultViewport: { width: 1920, height: 1080 } 
             });
             console.log("[CONNECTED] Success!");
             return browser;
@@ -53,22 +53,26 @@ async function tryScrape(urlBase, tmdbId) {
 
         const page = await browser.newPage();
         
-        // 1. Headers (Look like a real user)
+        // 1. Desktop Headers
         await page.setExtraHTTPHeaders({
             'Referer': 'https://imdb.com/',
             'Upgrade-Insecure-Requests': '1',
             'Accept-Language': 'en-US,en;q=0.9'
         });
 
-        // 2. Network Sniffer
+        // 2. Enhanced Sniffer (Logs ALL media types)
         let videoUrl = null;
         await page.setRequestInterception(true);
         
         page.on('request', (request) => {
             const rUrl = request.url();
-            if ((rUrl.includes('.m3u8') || rUrl.includes('.mp4')) && !rUrl.includes('thumb')) {
-                console.log("[FOUND VIDEO] ", rUrl);
-                videoUrl = rUrl;
+            // Broader check for media
+            if (rUrl.includes('.m3u8') || rUrl.includes('.mp4') || rUrl.includes('.mpd')) {
+                // Ignore thumbnails and subtitles
+                if (!rUrl.includes('.jpg') && !rUrl.includes('.png') && !rUrl.includes('.vtt')) {
+                    console.log("[FOUND VIDEO] ", rUrl);
+                    videoUrl = rUrl;
+                }
             }
             request.continue();
         });
@@ -76,7 +80,7 @@ async function tryScrape(urlBase, tmdbId) {
         // 3. Go to page
         await page.goto(targetURL, { waitUntil: 'domcontentloaded', timeout: 30000 });
 
-        // Check if we are blocked
+        // 4. Check for Block
         const title = await page.title();
         console.log(`[PAGE TITLE] ${title}`);
         if (title.includes("Just a moment") || title.includes("Cloudflare")) {
@@ -85,40 +89,39 @@ async function tryScrape(urlBase, tmdbId) {
             return null;
         }
 
-        // 4. THE HUMAN CLICK STRATEGY
-        console.log("[ACTION] Mimicking human behavior...");
-
-        // A. Move mouse around (Triggers 'hover' states)
-        await page.mouse.move(100, 100);
-        await new Promise(r => setTimeout(r, 500));
-        await page.mouse.move(683, 384); // Center of 1366x768
+        // 5. HUMAN ACTIONS
+        console.log("[ACTION] Initializing clicks...");
         
-        // B. CLICK CENTER (Click 1)
-        console.log("[CLICK] Center Screen (Attempt 1)");
-        await page.mouse.down();
-        await new Promise(r => setTimeout(r, 100)); // Real click duration
-        await page.mouse.up();
+        // Mouse Move
+        await page.mouse.move(500, 500);
+        await new Promise(r => setTimeout(r, 500));
 
-        // Wait (VidSrc often opens a popup on first click)
+        // Click 1 (Clear Ad)
+        await page.mouse.click(960, 540);
+        console.log("[CLICK] 1 (Clear Ad)");
         await new Promise(r => setTimeout(r, 2000));
 
-        // C. CLICK CENTER AGAIN (Click 2 - The real one)
-        console.log("[CLICK] Center Screen (Attempt 2)");
-        await page.mouse.down();
-        await new Promise(r => setTimeout(r, 100));
-        await page.mouse.up();
+        // Click 2 (Play)
+        await page.mouse.click(960, 540);
+        console.log("[CLICK] 2 (Play Attempt)");
+        
+        // 6. THE "FORCE PLAY" HACK
+        // This injects code to find the video element and force start it
+        console.log("[ACTION] Injecting Force-Play script...");
+        await page.evaluate(() => {
+            const vids = document.getElementsByTagName('video');
+            for (let i = 0; i < vids.length; i++) {
+                vids[i].play(); // Force start
+                vids[i].muted = false;
+            }
+        });
+        
+        // 7. Spacebar Backup (Keyboard Play)
+        await new Promise(r => setTimeout(r, 1000));
+        await page.keyboard.press('Space');
+        console.log("[KEYPRESS] Spacebar sent");
 
-        // D. IFRAME HAMMER
-        // Just in case the video is inside a frame, click the center of EVERY frame
-        const frames = page.frames();
-        for (const frame of frames) {
-            try {
-                // Click the body of the frame
-                await frame.click('body').catch(() => {});
-            } catch(e) {}
-        }
-
-        // 5. Wait for Video URL
+        // 8. Wait for Video URL
         for (let i = 0; i < 15; i++) {
             if (videoUrl) {
                 await browser.close();
@@ -157,7 +160,7 @@ app.get('/get-movie', async (req, res) => {
         if (streamLink) {
             res.json({ url: streamLink });
         } else {
-            res.status(404).json({ error: "Video did not start after clicks." });
+            res.status(404).json({ error: "Video loaded but stream URL never appeared." });
         }
     } catch (error) {
         res.status(500).json({ error: error.message });

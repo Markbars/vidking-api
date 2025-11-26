@@ -1,4 +1,4 @@
-console.log("Starting VidKing Backend [Force Play Edition]...");
+console.log("Starting VidKing Backend [Deep Frame Edition]...");
 
 const express = require('express');
 const puppeteer = require('puppeteer-core');
@@ -16,12 +16,12 @@ const REGIONS = [
     `wss://chrome.browserless.io?token=${BROWSERLESS_KEY}&stealth`
 ];
 
-// REORDERED: .pro is often cleaner. Added https/http support.
+// NEW SOURCES: Embed.su and 2Embed are often friendlier to bots
 const SOURCES = [
-    "https://vidsrc.pro/embed/movie/",
+    "https://embed.su/embed/movie/", 
+    "https://www.2embed.cc/embed/",
     "https://vidsrc.xyz/embed/movie/",
-    "https://vidsrc.to/embed/movie/",
-    "https://vidsrc.me/embed/movie/"
+    "https://vidsrc.to/embed/movie/"
 ];
 
 async function getBrowser() {
@@ -35,7 +35,7 @@ async function getBrowser() {
             console.log("[CONNECTED] Success!");
             return browser;
         } catch (e) {
-            console.log(`[FAILED] Region failed: ${e.message}`);
+            console.log(`[FAILED] Region failed (429 means too many tries, wait a bit): ${e.message}`);
         }
     }
     return null;
@@ -53,34 +53,30 @@ async function tryScrape(urlBase, tmdbId) {
 
         const page = await browser.newPage();
         
-        // 1. Desktop Headers
+        // Headers
         await page.setExtraHTTPHeaders({
             'Referer': 'https://imdb.com/',
-            'Upgrade-Insecure-Requests': '1',
-            'Accept-Language': 'en-US,en;q=0.9'
+            'Upgrade-Insecure-Requests': '1'
         });
 
-        // 2. Enhanced Sniffer (Logs ALL media types)
+        // Network Sniffer
         let videoUrl = null;
         await page.setRequestInterception(true);
         
         page.on('request', (request) => {
             const rUrl = request.url();
-            // Broader check for media
-            if (rUrl.includes('.m3u8') || rUrl.includes('.mp4') || rUrl.includes('.mpd')) {
-                // Ignore thumbnails and subtitles
-                if (!rUrl.includes('.jpg') && !rUrl.includes('.png') && !rUrl.includes('.vtt')) {
-                    console.log("[FOUND VIDEO] ", rUrl);
-                    videoUrl = rUrl;
-                }
+            // Look for m3u8, mp4, or mpd
+            if ((rUrl.includes('.m3u8') || rUrl.includes('.mp4') || rUrl.includes('.mpd')) && !rUrl.includes('thumb') && !rUrl.includes('jpg')) {
+                console.log("[FOUND VIDEO] ", rUrl);
+                videoUrl = rUrl;
             }
             request.continue();
         });
 
-        // 3. Go to page
+        // Go to page
         await page.goto(targetURL, { waitUntil: 'domcontentloaded', timeout: 30000 });
 
-        // 4. Check for Block
+        // Check for Block
         const title = await page.title();
         console.log(`[PAGE TITLE] ${title}`);
         if (title.includes("Just a moment") || title.includes("Cloudflare")) {
@@ -89,39 +85,50 @@ async function tryScrape(urlBase, tmdbId) {
             return null;
         }
 
-        // 5. HUMAN ACTIONS
-        console.log("[ACTION] Initializing clicks...");
+        // --- DEEP FRAME LOGIC ---
+        console.log("[ACTION] Hunting for frames...");
         
-        // Mouse Move
+        // Wait for frames to populate
+        await new Promise(r => setTimeout(r, 3000));
+        
+        // Initial Mouse Wiggle to wake up the player
         await page.mouse.move(500, 500);
-        await new Promise(r => setTimeout(r, 500));
+        await page.mouse.click(960, 540); // Blind Click Center
 
-        // Click 1 (Clear Ad)
-        await page.mouse.click(960, 540);
-        console.log("[CLICK] 1 (Clear Ad)");
-        await new Promise(r => setTimeout(r, 2000));
+        // Get all frames (Boxes inside boxes)
+        const frames = page.frames();
+        console.log(`[INFO] Found ${frames.length} frames.`);
 
-        // Click 2 (Play)
-        await page.mouse.click(960, 540);
-        console.log("[CLICK] 2 (Play Attempt)");
-        
-        // 6. THE "FORCE PLAY" HACK
-        // This injects code to find the video element and force start it
-        console.log("[ACTION] Injecting Force-Play script...");
-        await page.evaluate(() => {
-            const vids = document.getElementsByTagName('video');
-            for (let i = 0; i < vids.length; i++) {
-                vids[i].play(); // Force start
-                vids[i].muted = false;
+        // Loop through EVERY frame and inject the "Force Play" command
+        for (const frame of frames) {
+            try {
+                const result = await frame.evaluate(() => {
+                    // 1. Try to find video tags and force play
+                    const vids = document.getElementsByTagName('video');
+                    if (vids.length > 0) {
+                        for(let v of vids) {
+                            v.muted = false;
+                            v.play();
+                        }
+                        return "Found <video> tag";
+                    }
+                    
+                    // 2. Try to find common play buttons
+                    const btn = document.querySelector('.play-btn, #player_code, .r-player, #play-button, button[class*="play"]');
+                    if (btn) {
+                        btn.click();
+                        return "Clicked Play Button";
+                    }
+                    return null;
+                });
+
+                if (result) console.log(`[FRAME ACTION] ${result}`);
+            } catch (e) {
+                // Ignore security errors
             }
-        });
-        
-        // 7. Spacebar Backup (Keyboard Play)
-        await new Promise(r => setTimeout(r, 1000));
-        await page.keyboard.press('Space');
-        console.log("[KEYPRESS] Spacebar sent");
+        }
 
-        // 8. Wait for Video URL
+        // Wait for Video URL
         for (let i = 0; i < 15; i++) {
             if (videoUrl) {
                 await browser.close();
@@ -153,6 +160,7 @@ app.get('/get-movie', async (req, res) => {
     const { id } = req.query;
     if (!id) return res.status(400).send({ error: "Missing ID" });
     
+    // 90 second timeout
     req.setTimeout(90000); 
 
     try {
@@ -160,7 +168,7 @@ app.get('/get-movie', async (req, res) => {
         if (streamLink) {
             res.json({ url: streamLink });
         } else {
-            res.status(404).json({ error: "Video loaded but stream URL never appeared." });
+            res.status(404).json({ error: "Deep scan failed." });
         }
     } catch (error) {
         res.status(500).json({ error: error.message });

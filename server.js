@@ -6,14 +6,13 @@ const app = express();
 app.use(cors());
 
 const PORT = process.env.PORT || 3000;
-
 const BROWSERLESS_KEY = "2TUZ3kpvkb60pJibc42c1993c5e9c908cb07a7cc0c69a3ee8"; 
 
-// WE TRY ALL KNOWN REGIONS
+// REGION HOPPER (Keep London first, it worked for you)
 const REGIONS = [
-    `wss://production-lon.browserless.io?token=${BROWSERLESS_KEY}&stealth`, // London
-    `wss://production-sfo.browserless.io?token=${BROWSERLESS_KEY}&stealth`, // San Francisco
-    `wss://chrome.browserless.io?token=${BROWSERLESS_KEY}&stealth`          // Universal
+    `wss://production-lon.browserless.io?token=${BROWSERLESS_KEY}&stealth`,
+    `wss://production-sfo.browserless.io?token=${BROWSERLESS_KEY}&stealth`,
+    `wss://chrome.browserless.io?token=${BROWSERLESS_KEY}&stealth`
 ];
 
 const SOURCES = [
@@ -22,18 +21,18 @@ const SOURCES = [
     "https://vidsrc.me/embed/movie/"
 ];
 
-// Helper: Connect to Browserless (Try all regions)
 async function getBrowser() {
     for (const endpoint of REGIONS) {
         try {
             console.log(`[CONNECTING] Trying region: ${endpoint.split('?')[0]}...`);
-            const browser = await puppeteer.connect({
-                browserWSEndpoint: endpoint
+            const browser = await puppeteer.connect({ 
+                browserWSEndpoint: endpoint,
+                defaultViewport: { width: 1920, height: 1080 } 
             });
             console.log("[CONNECTED] Success!");
             return browser;
         } catch (e) {
-            console.log(`[FAILED] Region failed (403 or Error): ${e.message}`);
+            console.log(`[FAILED] Region failed: ${e.message}`);
         }
     }
     return null;
@@ -46,22 +45,24 @@ async function tryScrape(urlBase, tmdbId) {
     let browser = null;
 
     try {
-        // 1. Get the Browser (Region Hopper)
         browser = await getBrowser();
-        
-        if (!browser) {
-            console.log("[CRITICAL] Could not connect to ANY Browserless region. Key might be inactive?");
-            return null;
-        }
+        if (!browser) return null;
 
         const page = await browser.newPage();
         
-        // 2. Listen for video
+        // 1. SET HEADERS (Crucial for VidSrc)
+        await page.setExtraHTTPHeaders({
+            'Referer': 'https://imdb.com/', // Fake referer
+            'Accept-Language': 'en-US,en;q=0.9'
+        });
+
+        // 2. LISTEN FOR VIDEO
         let videoUrl = null;
         await page.setRequestInterception(true);
         
         page.on('request', (request) => {
             const rUrl = request.url();
+            // VidSrc usually uses .m3u8 or master.m3u8
             if ((rUrl.includes('.m3u8') || rUrl.includes('.mp4')) && !rUrl.includes('thumb')) {
                 console.log("[FOUND] Video URL:", rUrl);
                 videoUrl = rUrl;
@@ -69,16 +70,41 @@ async function tryScrape(urlBase, tmdbId) {
             request.continue();
         });
 
-        // 3. Go to page
-        await page.goto(targetURL, { waitUntil: 'domcontentloaded', timeout: 30000 });
+        // 3. GO TO PAGE
+        await page.goto(targetURL, { waitUntil: 'domcontentloaded', timeout: 25000 });
 
-        // 4. Click Play
+        // 4. CHECK FOR CLOUDFLARE BLOCK
+        const title = await page.title();
+        console.log(`[PAGE TITLE] ${title}`);
+        if (title.includes("Just a moment") || title.includes("Cloudflare")) {
+            console.log("[BLOCKED] Cloudflare detected.");
+            await browser.close();
+            return null;
+        }
+
+        // 5. AGGRESSIVE CLICKING (Triple Click Strategy)
+        // Click 1: Clear overlay / Popup
         try {
-            await new Promise(r => setTimeout(r, 2000));
-            await page.mouse.click(683, 384);
+            await new Promise(r => setTimeout(r, 1500));
+            await page.mouse.click(960, 540); // Center
+            console.log("[CLICK] 1");
         } catch (e) {}
 
-        // 5. Wait for link
+        // Click 2: Hit the Play Button
+        try {
+            await new Promise(r => setTimeout(r, 1000));
+            await page.mouse.click(960, 540); // Center again
+            console.log("[CLICK] 2");
+        } catch (e) {}
+        
+        // Click 3: Backup (Bottom left play button)
+        try {
+            await new Promise(r => setTimeout(r, 1000));
+            await page.mouse.click(50, 950); 
+            console.log("[CLICK] 3");
+        } catch (e) {}
+
+        // 6. WAIT FOR RESULT
         for (let i = 0; i < 15; i++) {
             if (videoUrl) {
                 await browser.close();
@@ -117,7 +143,7 @@ app.get('/get-movie', async (req, res) => {
         if (streamLink) {
             res.json({ url: streamLink });
         } else {
-            res.status(404).json({ error: "No video found (Check Browserless Logs)" });
+            res.status(404).json({ error: "Connected to browser, but video did not start." });
         }
     } catch (error) {
         res.status(500).json({ error: error.message });

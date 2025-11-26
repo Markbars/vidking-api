@@ -1,13 +1,14 @@
-FROM ghcr.io/puppeteer/puppeteer:latest
+FROM node:18-slim
 
-USER root
+# Create app directory
 WORKDIR /usr/src/app
 
+# Install app dependencies
 COPY package*.json ./
-
-# WE USE INSTALL INSTEAD OF CI TO FIX THE VERSION CONFLICT
 RUN npm install
 
+# Bundle app source
 COPY . .
 
+# Start the app
 CMD [ "node", "server.js" ]

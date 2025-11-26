@@ -8,16 +8,16 @@ app.use(cors());
 const PORT = process.env.PORT || 3000;
 const BROWSERLESS_KEY = "2TUZ3kpvkb60pJibc42c1993c5e9c908cb07a7cc0c69a3ee8"; 
 
-// REGION HOPPER (Keep London first, it worked for you)
 const REGIONS = [
     `wss://production-lon.browserless.io?token=${BROWSERLESS_KEY}&stealth`,
     `wss://production-sfo.browserless.io?token=${BROWSERLESS_KEY}&stealth`,
     `wss://chrome.browserless.io?token=${BROWSERLESS_KEY}&stealth`
 ];
 
+// Focus on .xyz and .to as they loaded for you
 const SOURCES = [
-    "https://vidsrc.to/embed/movie/",
     "https://vidsrc.xyz/embed/movie/",
+    "https://vidsrc.to/embed/movie/",
     "https://vidsrc.me/embed/movie/"
 ];
 
@@ -27,7 +27,7 @@ async function getBrowser() {
             console.log(`[CONNECTING] Trying region: ${endpoint.split('?')[0]}...`);
             const browser = await puppeteer.connect({ 
                 browserWSEndpoint: endpoint,
-                defaultViewport: { width: 1920, height: 1080 } 
+                defaultViewport: { width: 1280, height: 720 } 
             });
             console.log("[CONNECTED] Success!");
             return browser;
@@ -50,63 +50,59 @@ async function tryScrape(urlBase, tmdbId) {
 
         const page = await browser.newPage();
         
-        // 1. SET HEADERS (Crucial for VidSrc)
+        // 1. Headers to look real
         await page.setExtraHTTPHeaders({
-            'Referer': 'https://imdb.com/', // Fake referer
-            'Accept-Language': 'en-US,en;q=0.9'
+            'Referer': 'https://imdb.com/',
+            'Upgrade-Insecure-Requests': '1'
         });
 
-        // 2. LISTEN FOR VIDEO
+        // 2. SUPER LOGGING (We need to see what is happening)
         let videoUrl = null;
         await page.setRequestInterception(true);
         
         page.on('request', (request) => {
             const rUrl = request.url();
-            // VidSrc usually uses .m3u8 or master.m3u8
-            if ((rUrl.includes('.m3u8') || rUrl.includes('.mp4')) && !rUrl.includes('thumb')) {
-                console.log("[FOUND] Video URL:", rUrl);
-                videoUrl = rUrl;
+            
+            // Log suspicious media files to debug
+            if (rUrl.includes('.m3u8') || rUrl.includes('.mp4') || rUrl.includes('.m3u') || rUrl.includes('.mpd')) {
+                console.log("[POTENTIAL VIDEO] ", rUrl);
+                if (!rUrl.includes('thumb')) videoUrl = rUrl;
             }
             request.continue();
         });
 
-        // 3. GO TO PAGE
-        await page.goto(targetURL, { waitUntil: 'domcontentloaded', timeout: 25000 });
+        // 3. Go to page
+        await page.goto(targetURL, { waitUntil: 'networkidle2', timeout: 30000 });
 
-        // 4. CHECK FOR CLOUDFLARE BLOCK
-        const title = await page.title();
-        console.log(`[PAGE TITLE] ${title}`);
-        if (title.includes("Just a moment") || title.includes("Cloudflare")) {
-            console.log("[BLOCKED] Cloudflare detected.");
-            await browser.close();
-            return null;
-        }
-
-        // 5. AGGRESSIVE CLICKING (Triple Click Strategy)
-        // Click 1: Clear overlay / Popup
-        try {
-            await new Promise(r => setTimeout(r, 1500));
-            await page.mouse.click(960, 540); // Center
-            console.log("[CLICK] 1");
-        } catch (e) {}
-
-        // Click 2: Hit the Play Button
-        try {
-            await new Promise(r => setTimeout(r, 1000));
-            await page.mouse.click(960, 540); // Center again
-            console.log("[CLICK] 2");
-        } catch (e) {}
+        // 4. SMART CLICKING (Find the button instead of guessing)
+        console.log("[ACTION] Looking for Play Button...");
         
-        // Click 3: Backup (Bottom left play button)
-        try {
-            await new Promise(r => setTimeout(r, 1000));
-            await page.mouse.click(50, 950); 
-            console.log("[CLICK] 3");
-        } catch (e) {}
+        // This script runs inside the browser to find the player
+        const clicked = await page.evaluate(async () => {
+            // Common selectors for play buttons on these sites
+            const selectors = ['#player_code', '.play-btn', '#play-button', 'div[class*="play"]', 'iframe'];
+            
+            for (let sel of selectors) {
+                const el = document.querySelector(sel);
+                if (el) {
+                    el.click(); // Click the element
+                    return `Clicked ${sel}`;
+                }
+            }
+            return "No specific button found, clicking center";
+        });
+        console.log(`[RESULT] ${clicked}`);
 
-        // 6. WAIT FOR RESULT
-        for (let i = 0; i < 15; i++) {
+        // 5. BACKUP: Manual Click Center (If smart click failed)
+        if (clicked.includes("No specific")) {
+            await page.mouse.click(640, 360);
+        }
+        
+        // 6. Wait longer for the video to start loading
+        console.log("[WAITING] Listening for network traffic...");
+        for (let i = 0; i < 20; i++) {
             if (videoUrl) {
+                console.log("[SUCCESS] Found Link:", videoUrl);
                 await browser.close();
                 return videoUrl;
             }
@@ -136,14 +132,14 @@ app.get('/get-movie', async (req, res) => {
     const { id } = req.query;
     if (!id) return res.status(400).send({ error: "Missing ID" });
     
-    req.setTimeout(60000); 
+    req.setTimeout(80000); // 80 seconds timeout
 
     try {
         const streamLink = await getAnyWorkingLink(id);
         if (streamLink) {
             res.json({ url: streamLink });
         } else {
-            res.status(404).json({ error: "Connected to browser, but video did not start." });
+            res.status(404).json({ error: "Page loaded, but video file never started." });
         }
     } catch (error) {
         res.status(500).json({ error: error.message });

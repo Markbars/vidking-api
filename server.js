@@ -1,4 +1,4 @@
-console.log("Starting VidKing Backend...");
+console.log("Starting VidKing Backend [Turnstile Edition]...");
 
 const express = require('express');
 const puppeteer = require('puppeteer-core');
@@ -16,20 +16,21 @@ const REGIONS = [
     `wss://chrome.browserless.io?token=${BROWSERLESS_KEY}&stealth`
 ];
 
+// Added 'SuperEmbed' and 'Vidsrc.pro' which are sometimes easier
 const SOURCES = [
+    "https://superembed.stream/movie/",
+    "https://vidsrc.pro/embed/movie/",
     "https://vidsrc.xyz/embed/movie/",
-    "https://vidsrc.to/embed/movie/",
-    "https://vidsrc.me/embed/movie/"
+    "https://vidsrc.to/embed/movie/"
 ];
 
-// Helper to connect to Browserless
 async function getBrowser() {
     for (const endpoint of REGIONS) {
         try {
             console.log(`[CONNECTING] Trying region: ${endpoint.split('?')[0]}...`);
             const browser = await puppeteer.connect({ 
                 browserWSEndpoint: endpoint,
-                defaultViewport: { width: 1280, height: 720 } 
+                defaultViewport: { width: 1920, height: 1080 } 
             });
             console.log("[CONNECTED] Success!");
             return browser;
@@ -40,7 +41,6 @@ async function getBrowser() {
     return null;
 }
 
-// Helper to scrape a single source
 async function tryScrape(urlBase, tmdbId) {
     const targetURL = `${urlBase}${tmdbId}`;
     console.log(`[ATTEMPT] Target: ${targetURL}`);
@@ -49,26 +49,22 @@ async function tryScrape(urlBase, tmdbId) {
 
     try {
         browser = await getBrowser();
-        if (!browser) {
-            console.log("[CRITICAL] Could not connect to any Browserless region.");
-            return null;
-        }
+        if (!browser) return null;
 
         const page = await browser.newPage();
         
-        // Headers to trick VidSrc
+        // 1. Headers
         await page.setExtraHTTPHeaders({
             'Referer': 'https://imdb.com/',
             'Upgrade-Insecure-Requests': '1'
         });
 
-        // Network Sniffer
+        // 2. Sniffer
         let videoUrl = null;
         await page.setRequestInterception(true);
         
         page.on('request', (request) => {
             const rUrl = request.url();
-            // Look for video files
             if ((rUrl.includes('.m3u8') || rUrl.includes('.mp4')) && !rUrl.includes('thumb')) {
                 console.log("[FOUND VIDEO] ", rUrl);
                 videoUrl = rUrl;
@@ -76,65 +72,53 @@ async function tryScrape(urlBase, tmdbId) {
             request.continue();
         });
 
-        // Go to page
+        // 3. Go to page
         await page.goto(targetURL, { waitUntil: 'networkidle2', timeout: 30000 });
 
-        // Check for Cloudflare Block
-        const title = await page.title();
-        if (title.includes("Just a moment") || title.includes("Cloudflare")) {
-            console.log("[BLOCKED] Cloudflare detected.");
-            await browser.close();
-            return null;
+        // 4. HANDLE CLOUDFLARE CHECKBOX (The missing piece)
+        console.log("[ACTION] Checking for Cloudflare/Turnstile...");
+        
+        // Wait a bit for widgets to load
+        await new Promise(r => setTimeout(r, 3000));
+        
+        // Look for iframes that might be Turnstile
+        const frames = page.frames();
+        for (const frame of frames) {
+            try {
+                const title = await frame.title();
+                // Turnstile often has no title or specific attributes
+                if (title.includes("challenge") || title.includes("Cloudflare")) {
+                    console.log("[CLICK] Found Cloudflare Frame. Clicking...");
+                    await frame.click('body'); 
+                    await new Promise(r => setTimeout(r, 2000));
+                }
+            } catch (e) {}
         }
 
-        // --- IFRAME DIVER STRATEGY ---
-        console.log("[ACTION] Searching for Iframes...");
-        
-        // Wait for frames
-        await new Promise(r => setTimeout(r, 2000));
-        
-        const frames = page.frames();
+        // 5. FIND PLAY BUTTON
         let clicked = false;
-        
-        // Try to click buttons inside every frame found
         for (const frame of frames) {
             try {
                 const clickedInFrame = await frame.evaluate(() => {
-                    // List of possible buttons
-                    const possibleButtons = [
-                        '.play-btn', 
-                        '#player_code', 
-                        'video', 
-                        '.r-player', 
-                        '#play-button'
-                    ];
-                    
-                    for (let selector of possibleButtons) {
-                        const btn = document.querySelector(selector);
-                        if (btn) {
-                            btn.click();
-                            return true;
-                        }
+                    // Added more specific selectors
+                    const buttons = document.querySelectorAll('.play-btn, #player_code, video, .r-player, #play-button, button[class*="play"]');
+                    if (buttons.length > 0) {
+                        buttons[0].click();
+                        return true;
                     }
                     return false;
                 });
-
-                if (clickedInFrame) {
-                    console.log(`[CLICK] Successfully clicked button in a frame!`);
-                    clicked = true;
-                }
-            } catch (e) {
-                // Ignore security errors from cross-origin frames
-            }
+                if (clickedInFrame) clicked = true;
+            } catch (e) {}
         }
 
-        // Backup Blind Click
-        if (!clicked) {
-            console.log("[BACKUP] No button found. Blind Center Click.");
-            await page.mouse.click(640, 360);
+        if (clicked) console.log("[CLICK] Clicked a play button!");
+        else {
+            console.log("[BACKUP] Blind clicking center for autoplay...");
+            await page.mouse.click(960, 540);
         }
 
-        // Wait for video URL to appear
+        // 6. Wait for Video URL
         for (let i = 0; i < 15; i++) {
             if (videoUrl) {
                 await browser.close();
@@ -166,7 +150,6 @@ app.get('/get-movie', async (req, res) => {
     const { id } = req.query;
     if (!id) return res.status(400).send({ error: "Missing ID" });
     
-    // Set long timeout
     req.setTimeout(90000); 
 
     try {
@@ -174,10 +157,9 @@ app.get('/get-movie', async (req, res) => {
         if (streamLink) {
             res.json({ url: streamLink });
         } else {
-            res.status(404).json({ error: "Video player found, but stream did not start." });
+            res.status(404).json({ error: "Cloud bypass failed. Try Localhost." });
         }
     } catch (error) {
-        console.error("SERVER ERROR:", error);
         res.status(500).json({ error: error.message });
     }
 });

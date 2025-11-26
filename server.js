@@ -1,5 +1,5 @@
 const express = require('express');
-const puppeteer = require('puppeteer-core'); // Changed to core for remote connection
+const puppeteer = require('puppeteer-core');
 const cors = require('cors');
 
 const app = express();
@@ -7,7 +7,7 @@ app.use(cors());
 
 const PORT = process.env.PORT || 3000;
 
-// PASTE YOUR BROWSERLESS KEY HERE
+// I inserted your key here:
 const BROWSERLESS_KEY = "2TUZ3kpvkb60pJibc42c1993c5e9c908cb07a7cc0c69a3ee8"; 
 
 const SOURCES = [
@@ -18,19 +18,21 @@ const SOURCES = [
 
 async function tryScrape(urlBase, tmdbId) {
     const targetURL = `${urlBase}${tmdbId}`;
-    console.log(`[ATTEMPT] Connecting via Browserless to: ${targetURL}`);
+    console.log(`[ATTEMPT] Connecting to: ${targetURL}`);
     
     let browser = null;
 
     try {
-        // CONNECT TO REMOTE BROWSER (The Bypass)
+        // --- THE FIX IS HERE ---
+        // We changed 'chrome.browserless.io' to 'production-sfo.browserless.io'
+        // This is the new address that accepts your key.
         browser = await puppeteer.connect({
-            browserWSEndpoint: `wss://chrome.browserless.io?token=${BROWSERLESS_KEY}&stealth`
+            browserWSEndpoint: `wss://production-sfo.browserless.io?token=${BROWSERLESS_KEY}`
         });
 
         const page = await browser.newPage();
         
-        // 1. Listen for the video file
+        // Listen for video file
         let videoUrl = null;
         await page.setRequestInterception(true);
         
@@ -43,16 +45,16 @@ async function tryScrape(urlBase, tmdbId) {
             request.continue();
         });
 
-        // 2. Go to the page (Browserless handles the IP)
+        // Go to page
         await page.goto(targetURL, { waitUntil: 'domcontentloaded', timeout: 30000 });
 
-        // 3. Try to Click "Play"
+        // Try to Click Play
         try {
             await new Promise(r => setTimeout(r, 2000));
             await page.mouse.click(683, 384);
         } catch (e) {}
 
-        // 4. Wait for link
+        // Wait for link
         for (let i = 0; i < 15; i++) {
             if (videoUrl) {
                 await browser.close();
@@ -91,7 +93,7 @@ app.get('/get-movie', async (req, res) => {
         if (streamLink) {
             res.json({ url: streamLink });
         } else {
-            res.status(404).json({ error: "Browserless could not find video." });
+            res.status(404).json({ error: "No video found." });
         }
     } catch (error) {
         res.status(500).json({ error: error.message });

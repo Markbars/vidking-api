@@ -1,3 +1,5 @@
+console.log("Starting VidKing Backend...");
+
 const express = require('express');
 const puppeteer = require('puppeteer-core');
 const cors = require('cors');
@@ -20,6 +22,7 @@ const SOURCES = [
     "https://vidsrc.me/embed/movie/"
 ];
 
+// Helper to connect to Browserless
 async function getBrowser() {
     for (const endpoint of REGIONS) {
         try {
@@ -37,6 +40,7 @@ async function getBrowser() {
     return null;
 }
 
+// Helper to scrape a single source
 async function tryScrape(urlBase, tmdbId) {
     const targetURL = `${urlBase}${tmdbId}`;
     console.log(`[ATTEMPT] Target: ${targetURL}`);
@@ -45,23 +49,26 @@ async function tryScrape(urlBase, tmdbId) {
 
     try {
         browser = await getBrowser();
-        if (!browser) return null;
+        if (!browser) {
+            console.log("[CRITICAL] Could not connect to any Browserless region.");
+            return null;
+        }
 
         const page = await browser.newPage();
         
-        // 1. Headers
+        // Headers to trick VidSrc
         await page.setExtraHTTPHeaders({
             'Referer': 'https://imdb.com/',
             'Upgrade-Insecure-Requests': '1'
         });
 
-        // 2. NETWORK SNIFFER (Global - sees traffic from all frames)
+        // Network Sniffer
         let videoUrl = null;
         await page.setRequestInterception(true);
         
         page.on('request', (request) => {
             const rUrl = request.url();
-            // Check for m3u8, mp4, or weird blobs
+            // Look for video files
             if ((rUrl.includes('.m3u8') || rUrl.includes('.mp4')) && !rUrl.includes('thumb')) {
                 console.log("[FOUND VIDEO] ", rUrl);
                 videoUrl = rUrl;
@@ -69,63 +76,112 @@ async function tryScrape(urlBase, tmdbId) {
             request.continue();
         });
 
-        // 3. GO TO PAGE
-        await page.goto(targetURL, { waitUntil: 'networkidle2', timeout: 35000 });
+        // Go to page
+        await page.goto(targetURL, { waitUntil: 'networkidle2', timeout: 30000 });
 
-        // 4. CHECK FOR CLOUDFLARE
+        // Check for Cloudflare Block
         const title = await page.title();
-        console.log(`[PAGE TITLE] ${title}`);
         if (title.includes("Just a moment") || title.includes("Cloudflare")) {
             console.log("[BLOCKED] Cloudflare detected.");
             await browser.close();
             return null;
         }
 
-        // 5. IFRAME DIVING (The Fix)
+        // --- IFRAME DIVER STRATEGY ---
         console.log("[ACTION] Searching for Iframes...");
         
-        // Wait a moment for frames to load
-        await new Promise(r => setTimeout(r, 3000));
-
+        // Wait for frames
+        await new Promise(r => setTimeout(r, 2000));
+        
         const frames = page.frames();
-        console.log(`[INFO] Found ${frames.length} frames.`);
-
-        // Loop through all frames (Main page + sub-frames) to find the button
         let clicked = false;
+        
+        // Try to click buttons inside every frame found
         for (const frame of frames) {
             try {
-                // Try to find a player or button inside this frame
-                const frameClicked = await frame.evaluate(() => {
-                    const playBtn = document.querySelector('.play-btn') || 
-                                    document.querySelector('#player_code') ||
-                                    document.querySelector('video') ||
-                                    document.querySelector('.r-player');
-                    if (playBtn) {
-                        playBtn.click();
-                        return true;
+                const clickedInFrame = await frame.evaluate(() => {
+                    // List of possible buttons
+                    const possibleButtons = [
+                        '.play-btn', 
+                        '#player_code', 
+                        'video', 
+                        '.r-player', 
+                        '#play-button'
+                    ];
+                    
+                    for (let selector of possibleButtons) {
+                        const btn = document.querySelector(selector);
+                        if (btn) {
+                            btn.click();
+                            return true;
+                        }
                     }
                     return false;
                 });
 
-                if (frameClicked) {
-                    console.log(`[CLICK] Clicked button inside a frame!`);
+                if (clickedInFrame) {
+                    console.log(`[CLICK] Successfully clicked button in a frame!`);
                     clicked = true;
-                    // Don't break yet, sometimes we need to click multiple layers
                 }
             } catch (e) {
-                // Ignore frame access errors (some frames are blocked security-wise)
+                // Ignore security errors from cross-origin frames
             }
         }
 
+        // Backup Blind Click
         if (!clicked) {
-            console.log("[BACKUP] No frame button found. Using Blind Center Click.");
+            console.log("[BACKUP] No button found. Blind Center Click.");
             await page.mouse.click(640, 360);
         }
 
-        // 6. WAIT FOR VIDEO URL
+        // Wait for video URL to appear
         for (let i = 0; i < 15; i++) {
             if (videoUrl) {
                 await browser.close();
                 return videoUrl;
             }
-            await new
+            await new Promise(r => setTimeout(r, 1000));
+        }
+
+        await browser.close();
+        return null;
+
+    } catch (e) {
+        console.log(`[FAIL] Error: ${e.message}`);
+        if (browser) await browser.close();
+        return null;
+    }
+}
+
+async function getAnyWorkingLink(tmdbId) {
+    let finalLink = null;
+    for (const source of SOURCES) {
+        finalLink = await tryScrape(source, tmdbId);
+        if (finalLink) break;
+    }
+    return finalLink;
+}
+
+app.get('/get-movie', async (req, res) => {
+    const { id } = req.query;
+    if (!id) return res.status(400).send({ error: "Missing ID" });
+    
+    // Set long timeout
+    req.setTimeout(90000); 
+
+    try {
+        const streamLink = await getAnyWorkingLink(id);
+        if (streamLink) {
+            res.json({ url: streamLink });
+        } else {
+            res.status(404).json({ error: "Video player found, but stream did not start." });
+        }
+    } catch (error) {
+        console.error("SERVER ERROR:", error);
+        res.status(500).json({ error: error.message });
+    }
+});
+
+app.listen(PORT, () => {
+    console.log(`Server running on port ${PORT}`);
+});

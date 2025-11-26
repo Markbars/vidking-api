@@ -14,7 +14,6 @@ const REGIONS = [
     `wss://chrome.browserless.io?token=${BROWSERLESS_KEY}&stealth`
 ];
 
-// Focus on .xyz and .to as they loaded for you
 const SOURCES = [
     "https://vidsrc.xyz/embed/movie/",
     "https://vidsrc.to/embed/movie/",
@@ -50,102 +49,83 @@ async function tryScrape(urlBase, tmdbId) {
 
         const page = await browser.newPage();
         
-        // 1. Headers to look real
+        // 1. Headers
         await page.setExtraHTTPHeaders({
             'Referer': 'https://imdb.com/',
             'Upgrade-Insecure-Requests': '1'
         });
 
-        // 2. SUPER LOGGING (We need to see what is happening)
+        // 2. NETWORK SNIFFER (Global - sees traffic from all frames)
         let videoUrl = null;
         await page.setRequestInterception(true);
         
         page.on('request', (request) => {
             const rUrl = request.url();
-            
-            // Log suspicious media files to debug
-            if (rUrl.includes('.m3u8') || rUrl.includes('.mp4') || rUrl.includes('.m3u') || rUrl.includes('.mpd')) {
-                console.log("[POTENTIAL VIDEO] ", rUrl);
-                if (!rUrl.includes('thumb')) videoUrl = rUrl;
+            // Check for m3u8, mp4, or weird blobs
+            if ((rUrl.includes('.m3u8') || rUrl.includes('.mp4')) && !rUrl.includes('thumb')) {
+                console.log("[FOUND VIDEO] ", rUrl);
+                videoUrl = rUrl;
             }
             request.continue();
         });
 
-        // 3. Go to page
-        await page.goto(targetURL, { waitUntil: 'networkidle2', timeout: 30000 });
+        // 3. GO TO PAGE
+        await page.goto(targetURL, { waitUntil: 'networkidle2', timeout: 35000 });
 
-        // 4. SMART CLICKING (Find the button instead of guessing)
-        console.log("[ACTION] Looking for Play Button...");
+        // 4. CHECK FOR CLOUDFLARE
+        const title = await page.title();
+        console.log(`[PAGE TITLE] ${title}`);
+        if (title.includes("Just a moment") || title.includes("Cloudflare")) {
+            console.log("[BLOCKED] Cloudflare detected.");
+            await browser.close();
+            return null;
+        }
+
+        // 5. IFRAME DIVING (The Fix)
+        console.log("[ACTION] Searching for Iframes...");
         
-        // This script runs inside the browser to find the player
-        const clicked = await page.evaluate(async () => {
-            // Common selectors for play buttons on these sites
-            const selectors = ['#player_code', '.play-btn', '#play-button', 'div[class*="play"]', 'iframe'];
-            
-            for (let sel of selectors) {
-                const el = document.querySelector(sel);
-                if (el) {
-                    el.click(); // Click the element
-                    return `Clicked ${sel}`;
-                }
-            }
-            return "No specific button found, clicking center";
-        });
-        console.log(`[RESULT] ${clicked}`);
+        // Wait a moment for frames to load
+        await new Promise(r => setTimeout(r, 3000));
 
-        // 5. BACKUP: Manual Click Center (If smart click failed)
-        if (clicked.includes("No specific")) {
+        const frames = page.frames();
+        console.log(`[INFO] Found ${frames.length} frames.`);
+
+        // Loop through all frames (Main page + sub-frames) to find the button
+        let clicked = false;
+        for (const frame of frames) {
+            try {
+                // Try to find a player or button inside this frame
+                const frameClicked = await frame.evaluate(() => {
+                    const playBtn = document.querySelector('.play-btn') || 
+                                    document.querySelector('#player_code') ||
+                                    document.querySelector('video') ||
+                                    document.querySelector('.r-player');
+                    if (playBtn) {
+                        playBtn.click();
+                        return true;
+                    }
+                    return false;
+                });
+
+                if (frameClicked) {
+                    console.log(`[CLICK] Clicked button inside a frame!`);
+                    clicked = true;
+                    // Don't break yet, sometimes we need to click multiple layers
+                }
+            } catch (e) {
+                // Ignore frame access errors (some frames are blocked security-wise)
+            }
+        }
+
+        if (!clicked) {
+            console.log("[BACKUP] No frame button found. Using Blind Center Click.");
             await page.mouse.click(640, 360);
         }
-        
-        // 6. Wait longer for the video to start loading
-        console.log("[WAITING] Listening for network traffic...");
-        for (let i = 0; i < 20; i++) {
+
+        // 6. WAIT FOR VIDEO URL
+        for (let i = 0; i < 15; i++) {
             if (videoUrl) {
-                console.log("[SUCCESS] Found Link:", videoUrl);
                 await browser.close();
                 return videoUrl;
             }
-            await new Promise(r => setTimeout(r, 1000));
-        }
-
-        await browser.close();
-        return null;
-
-    } catch (e) {
-        console.log(`[FAIL] Error: ${e.message}`);
-        if (browser) await browser.close();
-        return null;
-    }
-}
-
-async function getAnyWorkingLink(tmdbId) {
-    let finalLink = null;
-    for (const source of SOURCES) {
-        finalLink = await tryScrape(source, tmdbId);
-        if (finalLink) break;
-    }
-    return finalLink;
-}
-
-app.get('/get-movie', async (req, res) => {
-    const { id } = req.query;
-    if (!id) return res.status(400).send({ error: "Missing ID" });
-    
-    req.setTimeout(80000); // 80 seconds timeout
-
-    try {
-        const streamLink = await getAnyWorkingLink(id);
-        if (streamLink) {
-            res.json({ url: streamLink });
-        } else {
-            res.status(404).json({ error: "Page loaded, but video file never started." });
-        }
-    } catch (error) {
-        res.status(500).json({ error: error.message });
-    }
-});
-
-app.listen(PORT, () => {
-    console.log(`Server running on port ${PORT}`);
-});
+            await new

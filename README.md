@@ -1,1 +1,0 @@
-# vidking-api

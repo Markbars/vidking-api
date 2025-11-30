@@ -5,6 +5,13 @@
   <title>Mini PDF Toolkit</title>
   <link rel="stylesheet" href="index.css">
 </head>
+  <script>
+function showFileName(input, spanId) {
+  const fileNames = Array.from(input.files).map(f => f.name).join(', ');
+  document.getElementById(spanId).textContent = fileNames || 'No file chosen';
+}
+</script>
+
 <body>
   <div class="container">
     <h1>Mini PDF Toolkit</h1>

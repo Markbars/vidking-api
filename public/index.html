@@ -9,30 +9,42 @@
   <div class="container">
     <h1>Mini PDF Toolkit</h1>
 
-    <section class="tool">
-      <h2>Merge PDFs</h2>
-      <form id="mergeForm" enctype="multipart/form-data" method="POST" action="/merge">
-        <input type="file" name="pdfs" accept="application/pdf" multiple required>
-        <button type="submit">Merge PDFs</button>
-      </form>
-    </section>
+   <section class="tool">
+  <h2>Merge PDFs</h2>
+  <form id="mergeForm" enctype="multipart/form-data" method="POST" action="/merge">
+    <label class="file-btn">
+      Choose PDFs
+      <input type="file" name="pdfs" accept="application/pdf" multiple required onchange="showFileName(this, 'mergeFileName')">
+    </label>
+    <span id="mergeFileName" class="file-name">No file chosen</span>
+    <button type="submit">Merge PDFs</button>
+  </form>
+</section>
 
-    <section class="tool">
-      <h2>Split PDF</h2>
-      <form id="splitForm" enctype="multipart/form-data" method="POST" action="/split">
-        <input type="file" name="pdf" accept="application/pdf" required>
-        <input type="text" name="pages" placeholder="Pages (e.g. 1-3,5)" required>
-        <button type="submit">Split PDF</button>
-      </form>
-    </section>
+<section class="tool">
+  <h2>Split PDF</h2>
+  <form id="splitForm" enctype="multipart/form-data" method="POST" action="/split">
+    <label class="file-btn">
+      Choose PDF
+      <input type="file" name="pdf" accept="application/pdf" required onchange="showFileName(this, 'splitFileName')">
+    </label>
+    <span id="splitFileName" class="file-name">No file chosen</span>
+    <input type="text" name="pages" placeholder="Pages (e.g. 1-3,5)" required>
+    <button type="submit">Split PDF</button>
+  </form>
+</section>
 
-    <section class="tool">
-      <h2>Compress PDF</h2>
-      <form id="compressForm" enctype="multipart/form-data" method="POST" action="/compress">
-        <input type="file" name="pdf" accept="application/pdf" required>
-        <button type="submit">Compress PDF</button>
-      </form>
-    </section>
+<section class="tool">
+  <h2>Compress PDF</h2>
+  <form id="compressForm" enctype="multipart/form-data" method="POST" action="/compress">
+    <label class="file-btn">
+      Choose PDF
+      <input type="file" name="pdf" accept="application/pdf" required onchange="showFileName(this, 'compressFileName')">
+    </label>
+    <span id="compressFileName" class="file-name">No file chosen</span>
+    <button type="submit">Compress PDF</button>
+  </form>
+</section>
 
     <div id="message"></div>
   </div>

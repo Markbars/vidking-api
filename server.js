@@ -3,6 +3,7 @@ const multer = require('multer');
 const fs = require('fs');
 const { PDFDocument } = require('pdf-lib');
 const path = require('path');
+const { exec } = require('child_process');
 
 const app = express();
 const upload = multer({ dest: 'uploads/' });
@@ -11,7 +12,7 @@ app.use(express.static('public'));
 
 const PORT = process.env.PORT || 3000;
 
-// =================== Merge PDFs ===================
+// ============ Merge PDFs ============
 app.post('/merge', upload.array('pdfs'), async (req, res) => {
   const mergedPdf = await PDFDocument.create();
   for (const file of req.files) {
@@ -22,19 +23,16 @@ app.post('/merge', upload.array('pdfs'), async (req, res) => {
     fs.unlinkSync(file.path);
   }
   const outputPath = path.join(__dirname, 'output', 'merged.pdf');
-  const mergedBytes = await mergedPdf.save();
-  fs.writeFileSync(outputPath, mergedBytes);
+  fs.writeFileSync(outputPath, await mergedPdf.save());
   res.download(outputPath, 'merged.pdf');
 });
 
-// =================== Split PDF ===================
+// ============ Split PDF ============
 app.post('/split', upload.single('pdf'), async (req, res) => {
   const pdfBytes = fs.readFileSync(req.file.path);
   const pdf = await PDFDocument.load(pdfBytes);
-  const outputPath = path.join(__dirname, 'output', 'split.pdf');
-
   const newPdf = await PDFDocument.create();
-  const pagesInput = req.body.pages.split(','); // e.g. "1-3,5"
+  const pagesInput = req.body.pages.split(',');
 
   for (let part of pagesInput) {
     if (part.includes('-')) {
@@ -48,24 +46,28 @@ app.post('/split', upload.single('pdf'), async (req, res) => {
     }
   }
 
-  const newBytes = await newPdf.save();
-  fs.writeFileSync(outputPath, newBytes);
+  const outputPath = path.join(__dirname, 'output', 'split.pdf');
+  fs.writeFileSync(outputPath, await newPdf.save());
   fs.unlinkSync(req.file.path);
   res.download(outputPath, 'split.pdf');
 });
 
-// =================== Compress PDF ===================
-// Simple compress: reduce image quality (pdf-lib doesn't natively compress, so we re-save)
+// ============ Compress PDF using Ghostscript ============
 app.post('/compress', upload.single('pdf'), async (req, res) => {
-  const pdfBytes = fs.readFileSync(req.file.path);
-  const pdf = await PDFDocument.load(pdfBytes);
+  const inputPath = req.file.path;
   const outputPath = path.join(__dirname, 'output', 'compressed.pdf');
 
-  // For simplicity: just re-save. For real compression, you'd need more advanced libraries
-  const compressedBytes = await pdf.save({ useObjectStreams: true });
-  fs.writeFileSync(outputPath, compressedBytes);
-  fs.unlinkSync(req.file.path);
-  res.download(outputPath, 'compressed.pdf');
+  // Ghostscript command for medium quality compression
+  const cmd = `gs -sDEVICE=pdfwrite -dCompatibilityLevel=1.4 -dPDFSETTINGS=/ebook -dNOPAUSE -dBATCH -sOutputFile="${outputPath}" "${inputPath}"`;
+
+  exec(cmd, (err) => {
+    fs.unlinkSync(inputPath); // delete original uploaded file
+    if (err) {
+      console.error(err);
+      return res.status(500).send("Compression failed");
+    }
+    res.download(outputPath, 'compressed.pdf');
+  });
 });
 
 app.listen(PORT, () => console.log(`PDF Toolkit running on port ${PORT}`));

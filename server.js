@@ -16,8 +16,8 @@ app.post('/merge', upload.array('pdfs'), async (req, res) => {
     const pdfBytes = fs.readFileSync(file.path);
     const pdf = await PDFDocument.load(pdfBytes);
     const copiedPages = await mergedPdf.copyPages(pdf, pdf.getPageIndices());
-    copiedPages.forEach((page) => mergedPdf.addPage(page));
-    fs.unlinkSync(file.path); // delete uploaded file
+    copiedPages.forEach(page => mergedPdf.addPage(page));
+    fs.unlinkSync(file.path);
   }
 
   const mergedBytes = await mergedPdf.save();

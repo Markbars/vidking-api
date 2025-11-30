@@ -157,3 +157,51 @@ a {
 a:hover {
   text-decoration: underline;
 }
+
+/* Flex container for form items */
+.tool form {
+  display: flex;
+  align-items: center;
+  gap: 10px; /* space between items */
+  flex-wrap: wrap; /* wrap to next line if screen is small */
+  margin-top: 10px;
+}
+
+/* Style file button */
+.tool label.file-btn {
+  display: inline-block;
+  background-color: #007bff;
+  color: white;
+  padding: 8px 15px;
+  border-radius: 8px;
+  cursor: pointer;
+  transition: background 0.3s, transform 0.2s;
+}
+
+.tool label.file-btn:hover {
+  background-color: #0056b3;
+  transform: translateY(-2px);
+}
+
+/* Filename text */
+.tool .file-name {
+  font-size: 14px;
+  color: #555;
+}
+
+/* Submit button */
+.tool button {
+  background-color: #28a745;
+  color: white;
+  padding: 8px 15px;
+  border-radius: 8px;
+  border: none;
+  cursor: pointer;
+  transition: background 0.3s, transform 0.2s;
+}
+
+.tool button:hover {
+  background-color: #1e7e34;
+  transform: translateY(-2px);
+}
+
